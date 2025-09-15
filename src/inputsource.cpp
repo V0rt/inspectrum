@@ -40,6 +40,22 @@
 #include <QFile>
 
 
+class ComplexF64SampleAdapter : public SampleAdapter {
+public:
+	size_t sampleSize() override {
+		return sizeof(std::complex<double>);
+	}
+	
+	void copyRange(const void* const src, size_t start, size_t length, std::complex<float>* const dest) override {
+		auto s = reinterpret_cast<const std::complex<double>*>(src);
+		std::transform(&s[start], &s[start + length], dest,
+					   [](const std::complex<double>& v) -> std::complex<float> {
+						   return { static_cast<float>(v.real()) , static_cast<float>(v.imag()) };
+					   }
+		);
+	}
+};
+
 class ComplexF32SampleAdapter : public SampleAdapter {
 public:
     size_t sampleSize() override {
@@ -52,37 +68,81 @@ public:
     }
 };
 
-class ComplexF64SampleAdapter : public SampleAdapter {
-public:
-    size_t sampleSize() override {
-        return sizeof(std::complex<double>);
-    }
-
-    void copyRange(const void* const src, size_t start, size_t length, std::complex<float>* const dest) override {
-        auto s = reinterpret_cast<const std::complex<double>*>(src);
-        std::transform(&s[start], &s[start + length], dest,
-            [](const std::complex<double>& v) -> std::complex<float> {
-                return { static_cast<float>(v.real()) , static_cast<float>(v.imag()) };
-            }
-        );
-    }
-};
-
 class ComplexS32SampleAdapter : public SampleAdapter {
 public:
-    size_t sampleSize() override {
-        return sizeof(std::complex<int32_t>);
-    }
+	size_t sampleSize() override {
+		return sizeof(std::complex<int32_t>);
+	}
+	
+	void copyRange(const void* const src, size_t start, size_t length, std::complex<float>* const dest) override {
+		auto s = reinterpret_cast<const std::complex<int32_t>*>(src);
+		std::transform(&s[start], &s[start + length], dest,
+					   [](const std::complex<int32_t>& v) -> std::complex<float> {
+						   const float k = 1.0f / 2147483648.0f;
+						   return { v.real() * k, v.imag() * k };
+					   }
+		);
+	}
+};
 
-    void copyRange(const void* const src, size_t start, size_t length, std::complex<float>* const dest) override {
-        auto s = reinterpret_cast<const std::complex<int32_t>*>(src);
-        std::transform(&s[start], &s[start + length], dest,
-            [](const std::complex<int32_t>& v) -> std::complex<float> {
-                const float k = 1.0f / 2147483648.0f;
-                return { v.real() * k, v.imag() * k };
-            }
-        );
-    }
+class ComplexS24SampleAdapter : public SampleAdapter {
+public:
+	size_t sampleSize() override {
+		return 6; // 6 bytes per complex sample (3 bytes real + 3 bytes imag)
+	}
+	
+	void copyRange(const void* const src, size_t start, size_t length, std::complex<float>* const dest) override {
+		auto s = reinterpret_cast<const char*>(src);
+		char* pSrc = (char*)s + start * 6;
+		auto* pDst = (std::complex<float>*)dest;
+		
+		for (size_t i = 0; i < length; i++) {
+			// Read real part (first 3 bytes)
+			uint32_t real_value = *((uint32_t*)pSrc);
+			pSrc += 3;
+			int32_t real = real_value & 0x00FFFFFF;
+			if (real & 0x00800000) { // Check highest bit
+				real |= 0xFF000000;  // Extend sign
+			}
+			
+			// Read imaginary part (next 3 bytes)
+			uint32_t imag_value = *((uint32_t*)pSrc);
+			pSrc += 3;
+			int32_t imag = imag_value & 0x00FFFFFF;
+			if (imag & 0x00800000) { // Check highest bit
+				imag |= 0xFF000000;  // Extend sign
+			}
+			
+			*pDst++ = std::complex<float>(real / 8388608.0f, imag / 8388608.0f);
+		}
+	}
+};
+
+class ComplexU24SampleAdapter : public SampleAdapter {
+public:
+	size_t sampleSize() override {
+		return 6; // 6 bytes per complex sample (3 bytes real + 3 bytes imag)
+	}
+	
+	void copyRange(const void* const src, size_t start, size_t length, std::complex<float>* const dest) override {
+		auto s = reinterpret_cast<const char*>(src);
+		char* pSrc = (char*)s + start * 6;
+		auto* pDst = (std::complex<float>*)dest;
+		
+		for (size_t i = 0; i < length; i++) {
+			// Read real part (first 3 bytes)
+			uint32_t real_value = *((uint32_t*)pSrc);
+			pSrc += 3;
+			uint32_t real = real_value & 0x00FFFFFF;
+			
+			// Read imaginary part (next 3 bytes)
+			uint32_t imag_value = *((uint32_t*)pSrc);
+			pSrc += 3;
+			uint32_t imag = imag_value & 0x00FFFFFF;
+			
+			*pDst++ = std::complex<float>(real / 16777216.0f, imag / 16777216.0f);
+		}
+	}
 };
 
 class ComplexS16SampleAdapter : public SampleAdapter {
@@ -100,6 +160,35 @@ public:
             }
         );
     }
+};
+
+class ComplexS12SampleAdapter : public SampleAdapter {
+public:
+	size_t sampleSize() override {
+		return sizeof(uint16_t);
+	}
+	
+	void copyRange(const void* const src, size_t start, size_t length, std::complex<float>* const dest) override {
+		auto s = reinterpret_cast<const char*>(src);
+		char* pSrc = (char*)s + start * 3;
+		auto* pDst = (std::complex<float>*)dest;
+		
+		unsigned long ii;
+		unsigned int I;
+		
+		for (ii = 0; ii < length; ii++) {
+			I = *((unsigned int*)pSrc);
+			pSrc += 3;
+			
+			// Real part (first 12 bits)
+			float real = (short)((I & 0x0fff) << 4) / 2048.0;
+			// Imaginary part (second 12 bits)
+			float imag = (short)((I >> 8) & 0xfff0) / 2048.0;
+			
+			*pDst++ = std::complex<float>(real, imag);
+			// *pDst++ = std::complex<float>(imag,real); // or swap ?
+		}
+	}
 };
 
 class ComplexS8SampleAdapter : public SampleAdapter {
@@ -214,6 +303,96 @@ public:
             [](const uint8_t& v) -> std::complex<float> {
                 const float k = 1.0f / 128.0f;
                 return { (v - 127.4f) * k, 0 };
+            }
+        );
+    }
+};
+
+class RealS12SampleAdapter : public SampleAdapter {
+public:
+    size_t sampleSize() override {
+        return sizeof(uint16_t);
+    }
+
+    void copyRange(const void* const src, size_t start, size_t length, std::complex<float>* const dest) override {
+        auto s = reinterpret_cast<const char*>(src);
+        char* pSrc = (char*)s + start * 3 / 2;
+        auto* pDst = (std::complex<float>*)dest;
+
+        unsigned long ii;
+        unsigned int I;
+
+        for (ii = 0; ii < length; ii += 2) {
+            I = *((unsigned int*)pSrc);
+            pSrc += 3;
+
+            *pDst++ = std::complex<float>((short)((I & 0x0fff) << 4) / 2048.0, 0.0f);
+            *pDst++ = std::complex<float>((short)((I >> 8) & 0xfff0) / 2048.0, 0.0f);
+        }
+    }
+};
+
+class RealS24SampleAdapter : public SampleAdapter {
+public:
+    size_t sampleSize() override {
+        return 3; // 3 bytes per sample
+    }
+
+    void copyRange(const void* const src, size_t start, size_t length, std::complex<float>* const dest) override {
+        auto s = reinterpret_cast<const char*>(src);
+        char* pSrc = (char*)s + start * 3;
+        auto* pDst = (std::complex<float>*)dest;
+
+        for (size_t i = 0; i < length; i++) {
+            uint32_t value = *((uint32_t*)pSrc);
+            pSrc += 3;
+
+            // Extract 24-bit signed value and extend sign
+            int32_t sample = value & 0x00FFFFFF;
+            if (sample & 0x00800000) { // Check highest bit (bit 23)
+                sample |= 0xFF000000;  // Set all higher bits to 1
+            }
+
+            *pDst++ = std::complex<float>(sample / 8388608.0f, 0.0f); // 2^23 for normalization
+        }
+    }
+};
+
+class RealU24SampleAdapter : public SampleAdapter {
+public:
+    size_t sampleSize() override {
+        return 3; // 3 bytes per sample
+    }
+
+    void copyRange(const void* const src, size_t start, size_t length, std::complex<float>* const dest) override {
+        auto s = reinterpret_cast<const char*>(src);
+        char* pSrc = (char*)s + start * 3;
+        auto* pDst = (std::complex<float>*)dest;
+
+        for (size_t i = 0; i < length; i++) {
+            uint32_t value = *((uint32_t*)pSrc);
+            pSrc += 3;
+
+            // Extract 24-bit unsigned value
+            uint32_t sample = value & 0x00FFFFFF;
+            
+            *pDst++ = std::complex<float>(sample / 16777216.0f, 0.0f); // 2^24 for normalization
+        }
+    }
+};
+
+class RealS32SampleAdapter : public SampleAdapter {
+public:
+    size_t sampleSize() override {
+        return sizeof(int32_t);
+    }
+
+    void copyRange(const void* const src, size_t start, size_t length, std::complex<float>* const dest) override {
+        auto s = reinterpret_cast<const int32_t*>(src);
+        std::transform(&s[start], &s[start + length], dest,
+            [](const int32_t& v) -> std::complex<float> {
+                const float k = 1.0f / 2147483648.0f; // 2^31
+                return { v * k, 0.0f };
             }
         );
     }
@@ -396,6 +575,34 @@ void InputSource::openFile(const char *filename)
         sampleAdapter = std::make_unique<RealU8SampleAdapter>();
         _realSignal = true;
     }
+    else if (suffix == "s12" || suffix == "nbl") {
+        sampleAdapter = std::make_unique<RealS12SampleAdapter>();
+        _realSignal = true;
+    }
+    else if (suffix == "cs12" || suffix == "sc12") {
+        sampleAdapter = std::make_unique<ComplexS12SampleAdapter>();
+    }
+    else if (suffix == "s24") {
+        sampleAdapter = std::make_unique<RealS24SampleAdapter>();
+        _realSignal = true;
+    }
+    else if (suffix == "u24" || suffix == "ui24") {
+        sampleAdapter = std::make_unique<RealU24SampleAdapter>();
+        _realSignal = true;
+    }
+    else if (suffix == "sc24" || suffix == "cs24" || suffix == "sdriq") {
+        sampleAdapter = std::make_unique<ComplexS24SampleAdapter>();
+    }
+    else if (suffix == "cu24" || suffix == "uc24") {
+        sampleAdapter = std::make_unique<ComplexU24SampleAdapter>();
+    }
+    else if (suffix == "s32") {
+        sampleAdapter = std::make_unique<RealS32SampleAdapter>();
+        _realSignal = true;
+    }
+    else if (suffix == "cs32" || suffix == "sc32") {
+        sampleAdapter = std::make_unique<ComplexS32SampleAdapter>();
+    }
     else {
         sampleAdapter = std::make_unique<ComplexF32SampleAdapter>();
     }
@@ -436,9 +643,16 @@ void InputSource::openFile(const char *filename)
     }
 
     auto size = file->size();
-    sampleCount = size / sampleAdapter->sampleSize();
+	int offset = 0;
 
-    auto data = file->map(0, size);
+	if(suffix == "sdriq"){
+		offset = 32;
+		size = size - offset;
+	}
+	
+	sampleCount = size / sampleAdapter->sampleSize();
+	
+    auto data = file->map(offset, size);
     if (data == nullptr)
         throw std::runtime_error("Error mmapping file");
 
